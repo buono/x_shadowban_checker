@@ -1,0 +1,132 @@
+{
+    "nodes": [
+      {
+        "parameters": {},
+        "id": "3e399e61-8edf-4ad1-9814-1f0af8d29d58",
+        "name": "Manual Trigger",
+        "type": "n8n-nodes-base.manualTrigger",
+        "typeVersion": 1,
+        "position": [
+          -128,
+          -384
+        ],
+        "disabled": true
+      },
+      {
+        "parameters": {
+          "command": "cd /home/node && node -e \"\nconst puppeteer = require('puppeteer');\n\n(async () => {\n  let browser;\n  try {\n    browser = await puppeteer.launch({\n      headless: true,\n      executablePath: '/usr/bin/chromium-browser',\n      args: ['--no-sandbox', '--disable-setuid-sandbox']\n    });\n    \n    const page = await browser.newPage();\n    \n    await page.goto('https://x-shadowban-checker.fia-s.com/', { waitUntil: 'networkidle2' });\n    await new Promise(r => setTimeout(r, 3000));\n    \n    // 入力フィールドにユーザー名を入力\n    const inputSelector = 'input[type=\\\"text\\\"], input:not([type=\\\"hidden\\\"])';\n    await page.waitForSelector(inputSelector, { timeout: 10000 });\n    await page.click(inputSelector, { clickCount: 3 });\n    await page.type(inputSelector, 'YOUR_X_ACCOUNT');\n    \n    // Submitボタンをクリック\n    await page.evaluate(() => {\n      const buttons = document.querySelectorAll('button');\n      for (const button of buttons) {\n        if (button.type === 'submit' && button.offsetWidth > 0 && button.offsetHeight > 0) {\n          button.click();\n          return;\n        }\n      }\n      if (buttons[1]) buttons[1].click();\n    });\n    \n    // 結果が表示されるまで待つ\n    await new Promise(r => setTimeout(r, 25000));\n    \n    // SVGアイコンから結果を取得\n    const results = await page.evaluate(() => {\n      const banTypes = ['Search Suggestion Ban', 'Search Ban', 'Ghost Ban', 'Reply Deboosting'];\n      const results = {};\n      \n      banTypes.forEach(banType => {\n        const buttons = Array.from(document.querySelectorAll('button'));\n        \n        for (const button of buttons) {\n          if (button.textContent && button.textContent.includes(banType)) {\n            let row = button.parentElement;\n            while (row && row.parentElement) {\n              const svgsInRow = row.querySelectorAll('svg');\n              \n              for (const svg of svgsInRow) {\n                const classList = svg.getAttribute('class') || '';\n                \n                if (classList.includes('lucide-check')) {\n                  results[banType] = 'Not banned';\n                  break;\n                } else if (classList.includes('lucide-ban')) {\n                  results[banType] = 'Banned';\n                  break;\n                }\n              }\n              \n              if (results[banType]) break;\n              row = row.parentElement;\n              if (row.tagName === 'BODY' || row.tagName === 'HTML') break;\n            }\n            break;\n          }\n        }\n        \n        if (!results[banType]) {\n          results[banType] = 'Unknown';\n        }\n      });\n      \n      return results;\n    });\n    \n    const finalResults = {\n      searchSuggestionBan: results['Search Suggestion Ban'],\n      searchBan: results['Search Ban'],\n      ghostBan: results['Ghost Ban'],\n      replyDeboosting: results['Reply Deboosting']\n    };\n    \n    console.log(JSON.stringify(finalResults));\n    \n  } catch (error) {\n    console.error(JSON.stringify({error: error.message}));\n  } finally {\n    if (browser) await browser.close();\n  }\n})();\""
+        },
+        "id": "9d188ece-6737-499f-a4ff-36bd5e36c2ca",
+        "name": "Execute Shadowban Check",
+        "type": "n8n-nodes-base.executeCommand",
+        "typeVersion": 1,
+        "position": [
+          80,
+          -384
+        ]
+      },
+      {
+        "parameters": {
+          "mode": "runOnceForEachItem",
+          "jsCode": "// 結果を解析\nconst output = $input.item.json.stdout;\nlet results;\n\ntry {\n  results = JSON.parse(output);\n} catch (e) {\n  results = {\n    searchSuggestionBan: 'Check failed',\n    searchBan: 'Check failed',\n    ghostBan: 'Check failed',\n    replyDeboosting: 'Check failed',\n    error: output\n  };\n}\n\n// 日本語変換\nfunction translateStatus(status) {\n  const translations = {\n    'Not banned': '問題なし ✓',\n    'Banned': '制限あり ⚠️',\n    'Unknown': '不明 ❓',\n    'Check failed': 'チェック失敗 ❌'\n  };\n  return translations[status] || status;\n}\n\n// バンされているかチェック\nconst hasAnyBan = \n  results.searchSuggestionBan === 'Banned' ||\n  results.searchBan === 'Banned' ||\n  results.ghostBan === 'Banned' ||\n  results.replyDeboosting === 'Banned';\n\n// 日時を取得\nconst checkedAt = new Date().toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo' });\n\n// Slackメッセージを作成\nlet slackText = hasAnyBan \n  ? '🚨 Xアカウントがシャドウバンされています！\\n\\n' \n  : '✅ Xアカウントは問題なく稼働中です\\n\\n';\n\nslackText += `アカウント: @YOUR_X_ACCOUNT\\n`;\nslackText += `チェック日時: ${checkedAt}\\n\\n`;\nslackText += `【チェック結果】\\n`;\nslackText += `• Search Suggestion Ban: ${translateStatus(results.searchSuggestionBan)}\\n`;\nslackText += `• Search Ban: ${translateStatus(results.searchBan)}\\n`;\nslackText += `• Ghost Ban: ${translateStatus(results.ghostBan)}\\n`;\nslackText += `• Reply Deboosting: ${translateStatus(results.replyDeboosting)}\\n\\n`;\n\n// Slack送信用のJSONオブジェクトを作成\nconst slackPayload = {\n  text: slackText\n};\n\nreturn {\n  json: {\n    ...results,\n    checkedAt,\n    hasAnyBan,\n    slackText,\n    slackPayload\n  }\n};"
+        },
+        "id": "640b5144-abe2-4c6e-ac12-7192ad08f17d",
+        "name": "Process Results",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          272,
+          -384
+        ]
+      },
+      {
+        "parameters": {
+          "method": "POST",
+          "url": "https://hooks.slack.com/services/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",
+          "sendBody": true,
+          "specifyBody": "json",
+          "jsonBody": "={{ $json.slackPayload }}",
+          "options": {}
+        },
+        "id": "c3f2a375-72c7-4299-9b85-d1a1640113f5",
+        "name": "Send to Slack",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.1,
+        "position": [
+          480,
+          -384
+        ]
+      },
+      {
+        "parameters": {
+          "rule": {
+            "interval": [
+              {
+                "field": "minutes",
+                "minutesInterval": 30
+              }
+            ]
+          }
+        },
+        "type": "n8n-nodes-base.scheduleTrigger",
+        "typeVersion": 1.2,
+        "position": [
+          -128,
+          -176
+        ],
+        "id": "f7e0b082-8d76-45e0-ae61-196189bec4a2",
+        "name": "Schedule Trigger"
+      }
+    ],
+    "connections": {
+      "Manual Trigger": {
+        "main": [
+          [
+            {
+              "node": "Execute Shadowban Check",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Execute Shadowban Check": {
+        "main": [
+          [
+            {
+              "node": "Process Results",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Process Results": {
+        "main": [
+          [
+            {
+              "node": "Send to Slack",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Schedule Trigger": {
+        "main": [
+          [
+            {
+              "node": "Execute Shadowban Check",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      }
+    },
+    "pinData": {},
+    "meta": {
+      "templateCredsSetupCompleted": true,
+      "instanceId": "b6b507bc6003485c0e94e802e419d1c7ecc9a44cf22ff4a22be1cef5f1e64ee5"
+    }
+  }
